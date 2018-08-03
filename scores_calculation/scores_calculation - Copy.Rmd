@@ -1,0 +1,691 @@
+---
+title: "scores_calculation"
+author: "Max O'Krepki"
+date: "May 19, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r loading the required libraries}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(rgdal)
+library(sp)
+library(leaflet)
+library(tidyr)
+library(googlesheets)
+```
+
+```{r setting the wd}
+setwd("C:\\Users\\Max\\Dropbox\\City_Systems\\Scores_Tools\\scores_calculation")
+```
+
+```{r importing the data}
+# Amenity info
+amenity_info <- read_csv("./inputs/amenity_categories_revised.csv")
+# may as well add the min column here
+amenity_info$num <- pmin(amenity_info$count, amenity_info$found)
+row.names(amenity_info) <- amenity_info$amenity_categories
+
+# Times from block group origins to amenities
+biking <- read_csv("C:/Users/Max/Dropbox/City_Systems/Scores_Tools/scores_calculation/inputs/biking_big_proper.csv")
+driving <- read_csv("C:/Users/Max/Dropbox/City_Systems/Scores_Tools/scores_calculation/inputs/driving_big_proper.csv")
+transit <- read_csv("C:/Users/Max/Dropbox/City_Systems/Scores_Tools/scores_calculation/inputs/transit_big_proper.csv")
+walking <- read_csv("C:/Users/Max/Dropbox/City_Systems/Scores_Tools/scores_calculation/inputs/walking_big_proper.csv")
+crow_matrix <- as.data.frame(read_csv("./inputs/crow_matrix_new_revised.csv"))
+# The weights table
+weights <- read_csv("./inputs/weights.csv")
+
+# Times for the parcels 
+biking_parcels      <- read_csv("./inputs/biking_parcels.csv")
+driving_parcels     <- read_csv("./inputs/driving_parcels.csv")
+transit_parcels     <- read_csv("./inputs/transit_parcels.csv")
+walking_parcels     <- read_csv("./inputs/walking_parcels.csv")
+crow_matrix_parcels <-read_csv("./inputs/crow_matrix_parcels.csv")
+
+```
+
+Could eventually integrate with google sheets 
+https://cran.r-project.org/web/packages/googlesheets/vignettes/basic-usage.html
+
+
+
+for some reason, r is importing the integers as factors which is weird. That's why it's converting them to characters later. 
+
+strsplit(names(biking)[2], '_') I can use this to split strings and grab the number at the end. If there's nothing there it should return NA and I'll just later replace those with 0's
+
+Replace any NAs with 100s here
+```{r replacing NAs}
+# Block groups to amenities
+biking <- as.matrix(biking)
+biking[is.na.data.frame(biking)] <- 100
+biking <- as.data.frame(biking)
+
+transit <- as.matrix(transit)
+transit[is.na.data.frame(transit)] <- 100
+transit <- as.data.frame(transit)
+
+driving <- as.matrix(driving)
+driving[is.na.data.frame(driving)] <- 100
+driving <- as.data.frame(driving)
+
+walking <- as.matrix(walking)
+walking[is.na.data.frame(walking)] <- 100
+walking <- as.data.frame(walking)
+
+# To parcels
+biking_parcels <- as.matrix(biking_parcels)
+biking_parcels[is.na.data.frame(biking_parcels)] <- 100
+biking_parcels <- as.data.frame(biking_parcels)
+
+transit_parcels <- as.matrix(transit_parcels)
+transit_parcels[is.na.data.frame(transit_parcels)] <- 100
+transit_parcels <- as.data.frame(transit_parcels)
+
+driving_parcels <- as.matrix(driving_parcels)
+driving_parcels[is.na.data.frame(driving_parcels)] <- 100
+driving_parcels <- as.data.frame(driving_parcels)
+
+walking_parcels <- as.matrix(walking_parcels)
+walking_parcels[is.na.data.frame(walking_parcels)] <- 100
+walking_parcels <- as.data.frame(walking_parcels)
+```
+
+Need to make the data long. 
+Crow matrix needs to also be ordered by crow_distance
+```{r making the data long}
+# Times to amenities into long format
+biking_long <- biking %>% gather(type, time_biking, -c(spatial_id))
+biking_long <- biking_long[order(biking_long$spatial_id),] 
+biking_long$time_biking <- as.numeric(biking_long$time_biking)
+
+driving_long <- driving %>% gather(type, time_driving, -c(spatial_id))
+driving_long <- driving_long[order(driving_long$spatial_id),] 
+driving_long$time_driving <- as.numeric(driving_long$time_driving)
+
+transit_long <- transit %>% gather(type, time_transit, -c(spatial_id))
+transit_long <- transit_long[order(transit_long$spatial_id),] 
+transit_long$time_transit <- as.numeric(transit_long$time_transit)
+
+walking_long <- walking %>% gather(type, time_walking, -c(spatial_id))
+walking_long <- walking_long[order(walking_long$spatial_id),] 
+walking_long$time_walking <- as.numeric(walking_long$time_walking)
+
+crow_matrix_long <- crow_matrix %>% gather(type, crow_distance, -c(spatial_id))
+# crow_matrix_long <- crow_matrix_long[order(c(crow_matrix_long$spatial_id), crow_matrix_long$crow_distance, crow_matrix_long$type),]
+# It thinks atm and atm_1 are different types. Need to see about splitting the string at the 2nd occurrence of _
+
+crow_matrix_long$rank <- (parse_number(crow_matrix_long$type)*-1)-1
+names(crow_matrix_long)[2] <- "type+rank"
+crow_matrix_long$type <- as.character(lapply(crow_matrix_long$`type+rank`, function(x) strsplit(x, split = '-')[[1]][[1]]))
+# Don't need to worry about ordering because the distances by mode are already ordered
+crow_matrix_long <- crow_matrix_long[with(crow_matrix_long, order(spatial_id, type, crow_distance)),]
+
+
+# Could search for a parcel APN, do a string replace, then bam, I have the general type. I don't need to do the elongating later on, but I will have to do the string replace later on though. 
+# Need to do the same for the block groups to parcels
+biking_parcels_long <- biking_parcels %>% gather(parcel, time_biking, -c(spatial_id))
+biking_parcels_long <- biking_parcels_long[order(biking_parcels_long$spatial_id),] 
+biking_parcels_long$time_biking <- as.numeric(biking_parcels_long$time_biking)
+
+driving_parcels_long <- driving_parcels %>% gather(parcel, time_driving, -c(spatial_id))
+driving_parcels_long <- driving_parcels_long[order(driving_parcels_long$spatial_id),] 
+driving_parcels_long$time_driving <- as.numeric(driving_parcels_long$time_driving)
+
+transit_parcels_long <- transit_parcels %>% gather(parcel, time_transit, -c(spatial_id))
+transit_parcels_long <- transit_parcels_long[order(transit_parcels_long$spatial_id),] 
+transit_parcels_long$time_transit <- as.numeric(transit_parcels_long$time_transit)
+
+walking_parcels_long <- walking_parcels %>% gather(parcel, time_walking, -c(spatial_id))
+walking_parcels_long <- walking_parcels_long[order(walking_parcels_long$spatial_id),] 
+walking_parcels_long$time_walking <- as.numeric(walking_parcels_long$time_walking)
+
+
+crow_parcels_long <- crow_matrix_parcels %>% gather(parcel, crow_distance, -c(spatial_id))
+crow_parcels_long <- crow_parcels_long[order(crow_parcels_long$spatial_id),] 
+```
+
+Reference this for splitting strings at the second occurrence 
+https://stackoverflow.com/questions/27298694/strsplit-by-second-occurence-of-the-delimiter
+
+
+R> dd[with(dd, order(-z, b)), ]
+
+
+Need to add them together to form one dataframe now. 
+
+
+!!!! Crow matrix long needs to be sorted, need to add a rank rolumn then sort, then add, shouldn't have to add rank later on if I do this. 
+
+Don't need this now but it's a good piece of code to remember
+gsub("-","_", crow_matrix_long$`type+rank`)
+
+Need to paste rank if rank geq 1
+
+paste(crow_matrix_long$type[2], crow_matrix_long$rank[2], sep = "_")
+This will have to get fixed once the zeros are added. 
+```{r merging the times data}
+# Problem is that type is not the same in crow matrix long as it is in the others, shouldn't be too hard to fix
+
+rank_fixer <- function(rank, type) {
+  if(rank > 0) {
+    return(paste(type, rank, sep = "_"))
+  } 
+  
+  return(type)
+}
+
+crow_matrix_long$`type+rank` <- mapply(rank_fixer, crow_matrix_long$rank, crow_matrix_long$type)
+
+
+merged_data <- biking_long %>% left_join(driving_long, by = c("spatial_id", "type")) %>% left_join(transit_long, by = c("spatial_id", "type")) %>% left_join(walking_long, by = c("spatial_id", "type")) %>% left_join(crow_matrix_long, by = c("spatial_id", "type"="type+rank"))
+
+names(merged_data)[9] <- "type_general"
+```
+
+At this point the merged data frame is in the proper format, now the scores just have to be calculated. Probably want to use an mapply. To the merged data, probably want to add a column for the marginal good score and the absolute good score. 
+
+Could write a helper function that has mapply inside of it. I may just have to rely on scope here. 
+```{r adding abs_good and marg_good here}
+# Setting row names on a tibble is deprecated. Got this message but it did appear to work. 
+row.names(weights) <- weights$type
+# Do I need this?
+merged_data$abs_good <- NA
+
+weight_adder <- function(category) {
+  
+  if (category %in% row.names(weights)) {
+    return(weights[category, 'abs_good'][[1]])
+  }
+  
+  return(weights['other', 'abs_good'][[1]])
+}
+
+merged_data$abs_good <- mapply(weight_adder, merged_data$type_general)
+
+# Now need to calculate the marginal scores. 
+
+marg_good_func <- function(rank, type) {
+  if (type %in% row.names(weights)) {
+    return(weights[type,'marginal_good'][[1]]^rank)
+  }
+  
+  return(weights['other', 'marginal_good'][[1]]^rank)
+}
+
+merged_data$marg_good <- mapply(marg_good_func, merged_data$rank, merged_data$type_general)
+
+# Was hoping to do matrix algebra but I think it would be too many steps to really make it any easier. 
+```
+
+
+```{r merging the parcels data}
+merged_data_parcels <- biking_parcels_long %>% left_join(driving_parcels_long, by = c("spatial_id", "parcel")) %>% left_join(transit_parcels_long, by = c("spatial_id", "parcel")) %>% left_join(walking_parcels_long, by = c("spatial_id", "parcel")) %>% left_join(crow_parcels_long, by = c("spatial_id", "parcel"))
+```
+
+
+Keeping the separate helper functions isn't necessary bad. Helps to keep the following code more organized. 
+```{r score function}
+# This would probably be a good function to port to rcpp
+score_calc <- function(time_biking, time_driving, time_transit, time_walking,  abs_good, rank, type) {
+  
+  # I do like the idea of keeping the helper functions in here. Could time it to see what the difference is but the helper functions do keep this one a little cleaner and just generally easier to follow. 
+  
+  if (! type %in% row.names(weights)) {
+    type <- 'other'
+  }
+  
+  # Eq 5
+  # it's exp of weight*times
+  marg_bike    <- exp(time_biking*weights[type , 'marginal_bike'][[1]])
+  marg_drive   <- exp(time_driving*weights[type , 'marginal_drive'][[1]])
+  marg_transit <- exp(time_transit*weights[type , 'marginal_transit'][[1]])
+  marg_walk    <- exp(time_walking*weights[type , 'marginal_walk'][[1]])
+  
+  # print(c("margs: ", marg_bike, marg_drive, marg_transit, marg_walk))
+  
+  # Eq 4
+  abs_bike    <- marg_bike*weights[type, 'abs_bike'][[1]]
+  abs_drive   <- marg_drive*weights[type, 'abs_drive'][[1]]
+  abs_transit <- marg_transit*weights[type, 'abs_transit'][[1]]
+  abs_walk    <- marg_walk*weights[type, 'abs_walk'] [[1]] 
+  
+  # print(c("abs", abs_bike, abs_drive, abs_transit, abs_walk))
+  
+  # Eq 3
+  total_mobility_score <- abs_bike + abs_drive + abs_transit + abs_walk
+  # print(total_mobility_score)
+  
+  # Eq 2, originally in a separate function but I'll move it here to see how it works. 
+  marg_good <- marg_good_func(rank, type)
+  
+  # Eq 1 
+  factor_in_rank <- marg_good*total_mobility_score
+  
+  # Final score, could also put the abs_good function here, may not be a bad idea. 
+  score <- abs_good*factor_in_rank
+  
+  # print(total_mobility_score)
+  # print(factor_in_rank)
+  return(score)
+  
+}
+```
+
+```{r actually calculating the scores}
+ptm <- proc.time()
+# Type argument needs to be the general type argument here. 
+# score_calc(time_biking = 3, time_driving = 3, time_transit = 10, time_walking = 10,  abs_good = 4.29, rank = 0, type = 'atm')
+# score_calc(2,1,3,7,6.66,0,'restaurant')
+
+# Now for the whole thing. 
+merged_data$scores <- score_calc(merged_data$time_biking, merged_data$time_driving, merged_data$time_transit, merged_data$time_walking, merged_data$abs_good, merged_data$rank, merged_data$type_general)
+
+bg_scores <- merged_data %>% group_by(spatial_id) %>% summarise('access_score' = sum(scores, na.rm = TRUE))
+
+proc.time() - ptm
+# bg_scores_save <- bg_scores
+```
+
+Right now this takes ~0.02 seconds. 
+
+score_calc(2,1,3,7,6.66,0,'restaurant')
+score_calc(2,1,3,7,4.29,0,'other')
+
+Use this to see what's failing 
+View(merged_data[!complete.cases(merged_data$scores),])
+Use this to see how many incomplete cases are left 
+sum(!complete.cases(merged_data$scores))
+
+I think the problem here now is that some of the inputs etc are possibly mixed up. The crow matrix OD's may not necessarily match up with the OD matrices by mode. I should proceed now because we still haven't really settled on the final list of destinations, possibly origins as well. 
+
+
+Turn the entire process into a single script and time it. Whole process takes 
+user  system elapsed 
+33.89    0.17   34.70
+
+This returns zero which is impressive especially considering rounding. It means that the two score columns are exactly equal. 
+sum(bg_scores_save$access_score != bg_scores$access_score)
+
+Script version
+```{r script version}
+ptm <- proc.time()
+# Importing the data
+biking <- read_csv("C:/Users/Max/Dropbox/City_Systems/Scores_Tools/scores_calculation/inputs/biking_big_proper.csv")
+
+driving <- read_csv("C:/Users/Max/Dropbox/City_Systems/Scores_Tools/scores_calculation/inputs/driving_big_proper.csv")
+
+transit <- read_csv("C:/Users/Max/Dropbox/City_Systems/Scores_Tools/scores_calculation/inputs/transit_big_proper.csv")
+
+walking <- read_csv("C:/Users/Max/Dropbox/City_Systems/Scores_Tools/scores_calculation/inputs/walking_big_proper.csv")
+
+crow_matrix <- as.data.frame(read_csv("./inputs/crow_matrix_new_revised.csv"))
+
+weights <- read_csv("./inputs/weights.csv")
+
+# Replacing na's
+biking <- as.matrix(biking)
+biking[is.na.data.frame(biking)] <- 100
+biking <- as.data.frame(biking)
+
+transit <- as.matrix(transit)
+transit[is.na.data.frame(transit)] <- 100
+transit <- as.data.frame(transit)
+
+# Making the data long
+biking_long <- biking %>% gather(type, time_biking, -c(spatial_id))
+biking_long <- biking_long[order(biking_long$spatial_id),] 
+biking_long$time_biking <- as.numeric(biking_long$time_biking)
+
+driving_long <- driving %>% gather(type, time_driving, -c(spatial_id))
+driving_long <- driving_long[order(driving_long$spatial_id),] 
+driving_long$time_driving <- as.numeric(driving_long$time_driving)
+
+transit_long <- transit %>% gather(type, time_transit, -c(spatial_id))
+transit_long <- transit_long[order(transit_long$spatial_id),] 
+transit_long$time_transit <- as.numeric(transit_long$time_transit)
+
+walking_long <- walking %>% gather(type, time_walking, -c(spatial_id))
+walking_long <- walking_long[order(walking_long$spatial_id),] 
+
+crow_matrix_long <- crow_matrix %>% gather(type, crow_distance, -c(spatial_id))
+# crow_matrix_long <- crow_matrix_long[order(c(crow_matrix_long$spatial_id), crow_matrix_long$crow_distance, crow_matrix_long$type),]
+# It thinks atm and atm_1 are different types. Need to see about splitting the string at the 2nd occurrence of _
+
+crow_matrix_long$rank <- (parse_number(crow_matrix_long$type)*-1)-1
+names(crow_matrix_long)[2] <- "type+rank"
+crow_matrix_long$type <- as.character(lapply(crow_matrix_long$`type+rank`, function(x) strsplit(x, split = '-')[[1]][[1]]))
+# Don't need to worry about ordering because the distances by mode are already ordered
+crow_matrix_long <- crow_matrix_long[with(crow_matrix_long, order(spatial_id, type, crow_distance)),]
+
+
+# Fixing titles
+rank_fixer <- function(rank, type) {
+  if(rank > 0) {
+    return(paste(type, rank, sep = "_"))
+  } 
+  
+  return(type)
+}
+
+crow_matrix_long$`type+rank` <- mapply(rank_fixer, crow_matrix_long$rank, crow_matrix_long$type)
+
+
+merged_data <- biking_long %>% left_join(driving_long, by = c("spatial_id", "type")) %>% left_join(transit_long, by = c("spatial_id", "type")) %>% left_join(walking_long, by = c("spatial_id", "type")) %>% left_join(crow_matrix_long, by = c("spatial_id", "type"="type+rank"))
+
+names(merged_data)[9] <- "type_general"
+
+# Fixing the weights table and adding abs good. 
+row.names(weights) <- weights$type
+# Do I need this?
+merged_data$abs_good <- NA
+
+weight_adder <- function(category) {
+  
+  if (category %in% row.names(weights)) {
+    return(weights[category, 'abs_good'][[1]])
+  }
+  
+  return(weights['other', 'abs_good'][[1]])
+}
+
+merged_data$abs_good <- mapply(weight_adder, merged_data$type_general)
+
+# Now need to calculate the marginal scores. 
+
+marg_good_func <- function(rank, type) {
+  if (type %in% row.names(weights)) {
+    return(weights[type,'marginal_good'][[1]]^rank)
+  }
+  
+  return(weights['other', 'marginal_good'][[1]]^rank)
+}
+
+merged_data$marg_good <- mapply(marg_good_func, merged_data$rank, merged_data$type_general)
+
+
+# Score calc function 
+# This would probably be a good function to port to rcpp
+score_calc <- function(time_biking, time_driving, time_transit, time_walking,  abs_good, rank, type) {
+  
+  # I do like the idea of keeping the helper functions in here. Could time it to see what the difference is but the helper functions do keep this one a little cleaner and just generally easier to follow. 
+  
+  if (! type %in% row.names(weights)) {
+    type <- 'other'
+  }
+  
+  # Eq 5
+  # it's exp of weight*times
+  marg_bike    <- exp(time_biking*weights[type , 'marginal_bike'][[1]])
+  marg_drive   <- exp(time_driving*weights[type , 'marginal_drive'][[1]])
+  marg_transit <- exp(time_transit*weights[type , 'marginal_transit'][[1]])
+  marg_walk    <- exp(time_walking*weights[type , 'marginal_walk'][[1]])
+  
+  # print(c("margs: ", marg_bike, marg_drive, marg_transit, marg_walk))
+  
+  # Eq 4
+  abs_bike    <- marg_bike*weights[type, 'abs_bike'][[1]]
+  abs_drive   <- marg_drive*weights[type, 'abs_drive'][[1]]
+  abs_transit <- marg_transit*weights[type, 'abs_transit'][[1]]
+  abs_walk    <- marg_walk*weights[type, 'abs_walk'] [[1]] 
+  
+  # print(c("abs", abs_bike, abs_drive, abs_transit, abs_walk))
+  
+  # Eq 3
+  total_mobility_score <- abs_bike + abs_drive + abs_transit + abs_walk
+  # print(total_mobility_score)
+  
+  # Eq 2, originally in a separate function but I'll move it here to see how it works. 
+  marg_good <- marg_good_func(rank, type)
+  
+  # Eq 1 
+  factor_in_rank <- marg_good*total_mobility_score
+  
+  # Final score, could also put the abs_good function here, may not be a bad idea. 
+  score <- abs_good*factor_in_rank
+  
+  # print(total_mobility_score)
+  # print(factor_in_rank)
+  return(score)
+  
+}
+
+# Actually calculating the sores. 
+
+merged_data$scores <- score_calc(merged_data$time_biking, merged_data$time_driving, merged_data$time_transit, merged_data$time_walking, merged_data$abs_good, merged_data$rank, merged_data$type_general)
+
+bg_scores <- merged_data %>% group_by(spatial_id) %>% summarise('access_score' = sum(scores, na.rm = TRUE))
+
+proc.time() - ptm
+```
+
+
+How to add the new amenities? 
+Need to add a general category, then can add abs_good
+Could create a temp merged data frame with only times, and general types, carry over ranks because this will eventually need to be corrected. Actually don't even need the marg column because it's being calculated in the score function. 
+
+Will need small block of code before just to make an initial assignment to the parcels. 
+names(crow_matrix_parcels)[2:60]
+Make first first 30 restaurants and the last 29 supermarkets
+
+The columns the dataframes need for score calculation. 
+time_biking, time_driving, time_transit, time_walking,  abs_good, rank, type 
+
+spatial_id needed for merging the two dataframes. 
+Could eventually make just one temp dataframe?
+```{r create scenarios}
+ptm <- proc.time()
+
+# Moved down here to make testing the different scenarios easier. 
+# Create then load the proposals csv here
+# parcel_proposals <- data.frame("APN" = names(biking_parcels)[2:60], "type" = NA)
+# write_csv(parcel_proposals, "./inputs/parcel_proposals.csv")
+parcel_proposals <- read_csv("./inputs/parcel_proposals.csv", col_types = cols(APN = col_character(), type = col_character()))
+row.names(parcel_proposals) <- parcel_proposals$APN
+
+
+# Don't need anymore since only proposals in the supported categories can really be proposed. 
+# Need to fill in the type_general as well as keep track of the counts of each.
+# parcel_proposals$type_general <- unlist(lapply(parcel_proposals$type, function(x) if (x %in% row.names(weights)) {return(x)} else {return('other')} ))
+
+new_parcel_types <- unique(parcel_proposals$type_general)
+
+type_counts <- unlist(lapply(new_parcel_types, function(p_type) return( nrow(parcel_proposals[parcel_proposals$type_general == p_type,]))))
+
+names(type_counts) <- new_parcel_types
+
+# View(type_counts)
+parcel_proposals %>% group_by(type_general) %>% summarize(n())
+
+temp_merged <- merged_data_parcels
+# Assign NA because it will be easier to drop any parcels not assigned a new development type. 
+# temp_merged$type_general <- NA
+
+temp_merged <- temp_merged %>% left_join(parcel_proposals, by = c("parcel" = "APN"))
+
+temp_merged$rank <- NA
+temp_merged$abs_good <- NA
+
+temp_merged$abs_good <- unlist(lapply(temp_merged$type_general, weight_adder))
+
+# Now just need to append the two dataframes and update the ranks where appropriate
+temp_merged <- subset(temp_merged, select = -parcel)
+
+
+temp_merged <- rbind(merged_data[,names(temp_merged)], temp_merged)
+
+# Now need to sort by spatial_id, type_general, crow_distance
+# Then reassign ranks but only for rows with general type of those assigned. 
+# For now, I'll just keep all but could easily trim each subset to only the desired amount of each amenity. 
+
+temp_merged <- temp_merged[order(temp_merged$spatial_id, temp_merged$type_general, temp_merged$crow_distance), ]
+
+# For now, just keep temp merged spatial_ids in the original 
+# tk - eventually needs to change
+temp_merged <- temp_merged %>% filter(spatial_id %in% biking$spatial_id)
+# some crow distances are missing because some block groups were removed, just drop these for now. I think it may have been the big block group to the west. 
+temp_merged <- temp_merged[complete.cases(temp_merged$crow_distance),]
+
+# Duplicate row names seem to be throwing off the boolean indexing 
+row.names(temp_merged) <- 1:nrow(temp_merged)
+
+
+# View(head(temp_merged[temp_merged$type_general == type,],100))
+
+for (type in new_parcel_types) {
+  # print(type)
+  for (id in unique(temp_merged$spatial_id)) {
+    # tk - right now I'm using length of the rest_parcels, may have to change how I do total length in the future. 
+    temp_merged[temp_merged$type_general == type & temp_merged$spatial_id == id, ]$rank <- c(0:(amenity_info[type,]$num - 1), rep(NA, type_counts[type][[1]]))
+    
+  }
+}
+
+# The above takes 1.64s, which isn't too bad I think. 
+
+# Removing the NA ranks. 
+temp_merged <- temp_merged[complete.cases(temp_merged$rank),]
+
+temp_merged$scores <- score_calc(temp_merged$time_biking, temp_merged$time_driving, temp_merged$time_transit, temp_merged$time_walking, temp_merged$abs_good, temp_merged$rank, temp_merged$type_general)
+
+
+bg_scores <- temp_merged %>% group_by(spatial_id) %>% summarise('access_score2' = sum(scores, na.rm = TRUE)) %>% left_join(bg_scores_save)
+
+bg_scores$diff <- bg_scores$access_score2- bg_scores$access_score
+bg_scores$diff_prcnt <- bg_scores$access_score2/bg_scores$access_score
+
+proc.time() - ptm
+
+range(bg_scores$diff_prcnt)
+View(bg_scores)
+```
+
+
+duplicated in case the previous chunk breaks.
+```{r duplicate create scenarios}
+ptm <- proc.time()
+new_parcel_types <- c('restaurant', 'supermarket')
+
+temp_merged_parcels <- merged_data_parcels
+# Assign NA because it will be easier to drop any parcels not assigned a new development type. 
+temp_merged_parcels$type_general <- NA
+temp_merged_parcels$rank <- NA
+temp_merged_parcels$abs_good <- NA
+
+rest_parcels <- names(crow_matrix_parcels)[2:31]
+supermarket_parcels <- names(crow_matrix_parcels)[32:60]
+
+type_counts <- c('restaurant' = 30, 'supermarket' = 29)
+
+# Change types here
+# Need to loop through each parcel and assign a general type
+parcel_assign <- function(parcel) {
+  if (parcel %in% rest_parcels) {
+    return('restaurant')
+  } else {
+    return('supermarket')
+  }
+}
+
+# Adding the development types to the new parcels. 
+temp_merged_parcels$type_general <- unlist(lapply(temp_merged_parcels$parcel, parcel_assign))
+# This part takes a few seconds, but should only have to be run once per assignment iteration. 
+temp_merged_parcels$abs_good <- unlist(lapply(temp_merged_parcels$type_general, weight_adder))
+
+# Now just need to append the two dataframes and update the ranks where appropriate
+temp_merged_parcels <- subset(temp_merged_parcels, select = -parcel)
+temp_merged <- merged_data[,names(temp_merged_parcels)]
+
+temp_merged <- rbind(temp_merged, temp_merged_parcels)
+
+# Now need to sort by spatial_id, type_general, crow_distance
+# Then reassign ranks but only for rows with general type of those assigned. 
+# For now, I'll just keep all but could easily trim each subset to only the desired amount of each amenity. 
+
+temp_merged <- temp_merged[order(temp_merged$spatial_id, temp_merged$type_general, temp_merged$crow_distance), ]
+
+# For now, just keep temp merged spatial_ids in the original 
+# tk - eventually needs to change
+temp_merged <- temp_merged %>% filter(spatial_id %in% biking$spatial_id)
+# some crow distances are missing because some block groups were removed, just drop these for now. I think it may have been the big block group to the west. 
+temp_merged <- temp_merged[complete.cases(temp_merged$crow_distance),]
+
+# Duplicate row names seem to be throwing off the boolean indexing 
+row.names(temp_merged) <- 1:nrow(temp_merged)
+
+# Don't really know why but some spatial_id's are NA, should check for it here. 
+# Even looping fixing the ranks is pretty quick. 
+
+View(head(temp_merged[temp_merged$type_general == type,],100))
+
+
+
+for (type in new_parcel_types) {
+  # print(type)
+  for (id in unique(temp_merged$spatial_id)) {
+    # tk - right now I'm using length of the rest_parcels, may have to change how I do total length in the future. 
+    temp_merged[temp_merged$type_general == type & temp_merged$spatial_id == id, ]$rank <- c(0:(amenity_info[type,]$num - 1), rep(NA, type_counts[type][[1]]))
+    
+  }
+}
+
+# The above takes 1.64s, which isn't too bad I think. 
+
+# Removing the NA ranks. 
+temp_merged <- temp_merged[complete.cases(temp_merged$rank),]
+
+temp_merged$scores <- score_calc(temp_merged$time_biking, temp_merged$time_driving, temp_merged$time_transit, temp_merged$time_walking, temp_merged$abs_good, temp_merged$rank, temp_merged$type_general)
+
+# bg_scores <- temp_merged %>% group_by(spatial_id) %>% summarise('access_score2' = sum(scores, na.rm = TRUE)) %>% left_join(bg_scores)
+# 
+# bg_scores$diff <- bg_scores$access_score2- bg_scores$access_score
+
+proc.time() - ptm
+```
+
+
+View(head(temp_merged[temp_merged$type_general == type, ],100))
+temp_merged[temp_merged$type_general == 'restaurant', ]
+
+This spatial_id can be used to confirm if it worked. 
+060770006002
+View(temp_merged[temp_merged$type_general == type & temp_merged$spatial_id == "060770006002", ])
+
+This bg can be used to see if it worked for the more interactive version
+060770007001
+
+View(temp_merged[temp_merged$type_general == type, ] %>% group_by(spatial_id) %>% summarise(n()))
+Some only have 30 restaurants, why? There are NA spatial_id's, again, why?
+View(temp_merged[!complete.cases(temp_merged$spatial_id),])
+
+Really for my sake, plot it just to see what things look like. 
+The map below confirms the mismatch bewtween the different data sources 
+```{r}
+data.shape <- readOGR(dsn='C:\\Users\\Max\\Dropbox\\City_Systems\\LODES\\SJ_bgs', layer = "SJ_bgs")
+# plot(data.shape)
+data.shape@data <- data.shape@data %>% left_join(bg_scores)
+data.shape <- data.shape[complete.cases(data.shape@data$access_score),]
+# plot(data.shape)
+View(data.shape@data)
+```
+
+```{r}
+pal <- colorNumeric(
+  palette = "RdYlGn",
+  domain = data.shape@data$diff_prcnt)
+
+leaflet(data.shape) %>% 
+  addTiles() %>%
+  addPolygons(stroke = TRUE,opacity = 1,fillOpacity = 0.9, smoothFactor = 0.5,
+              color=~pal(diff_prcnt),weight = 1) %>%
+  addLegend("bottomright", pal = pal, values = ~diff_prcnt,
+            title = "Accessibility Scores",
+            labFormat = labelFormat(prefix = ""),
+            opacity = 1
+  )
+```
+
