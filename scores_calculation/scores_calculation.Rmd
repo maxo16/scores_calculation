@@ -536,6 +536,14 @@ benchmark_score <- sum(ideal_data$score)
 benchmark_score
 ```
 
+
+Saving the starter data used by the online platform. 
+```{r}
+save(bg_scores, biking, merged_data, merged_data_parcels, ideal_data, file = "dashboard_data.RData")
+```
+
+
+
 View(head(temp_merged[temp_merged$type_general == type, ],100))
 temp_merged[temp_merged$type_general == 'restaurant', ]
 
