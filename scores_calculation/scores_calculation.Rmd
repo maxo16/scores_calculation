@@ -3,6 +3,8 @@ title: "scores_calculation"
 author: "Max O'Krepki"
 date: "May 19, 2018"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -489,6 +491,49 @@ toc()
 
 # range(bg_scores$diff_prcnt)
 View(bg_scores)
+```
+
+Order of modes (it's alpha) bike, drive, transit, walk
+Tk - column names must match
+```{r}
+ideal_time <- function(type, mode) {
+  if (! type %in% row.names(weights)) { type <- 'other'}
+  
+  if (mode == "bike") {
+    return(weights[type, "reasonable_bike"][[1]])
+  } else if (mode == "drive") {
+    return(weights[type, "reasonable_drive"][[1]])
+  } else if (mode == "transit") {
+    return(weights[type, "reasonable_transit"][[1]])
+  } else {
+    return(weights[type, "reasonable_walk"][[1]])
+  }
+  
+}
+```
+
+
+
+Code for finding the benchmark score. 
+```{r}
+# Start by making a list that has the types repeated. 
+types <- unlist(mapply(rep, x = amenity_info$amenity_categories, times = amenity_info$count))
+ideal_bike    <- unlist(lapply(types, ideal_time, mode = "bike"))
+ideal_drive   <- unlist(lapply(types, ideal_time, mode = "drive"))
+ideal_transit <- unlist(lapply(types, ideal_time, mode = "transit"))
+ideal_walk    <- unlist(lapply(types, ideal_time, mode = "walk"))
+
+ideal_data <- data.frame("type" = types, "ideal_bike" = ideal_bike, "ideal_drive" = ideal_drive, "ideal_transit" = ideal_transit, "ideal_walk" = ideal_walk)
+ideal_data$rank <- parse_number(row.names(ideal_data))
+ideal_data$rank <- ideal_data$rank - 1
+ideal_data$rank <- replace_na(ideal_data$rank, 0)
+
+ideal_data <- weight_adder(ideal_data, weights)
+
+ideal_data$score <- score_calc(ideal_data$ideal_bike, ideal_data$ideal_drive, ideal_data$ideal_transit, ideal_data$ideal_walk, ideal_data$abs_good, ideal_data$rank, ideal_data$type)
+
+benchmark_score <- sum(ideal_data$score)
+benchmark_score
 ```
 
 View(head(temp_merged[temp_merged$type_general == type, ],100))
